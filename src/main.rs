@@ -9,8 +9,8 @@ use colored::Colorize;
 use regex::Regex;
 
 use config::{load_config, parse_duration};
-use filters::{filter_by_age, filter_by_merge_status, filter_out_protected};
-use git_operations::{BranchInfo, delete_branch, get_current_branch, list_branches};
+use filters::{filter_by_age, filter_out_protected};
+use git_operations::{BranchInfo, get_current_branch, list_branches, safe_delete_branch};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -82,29 +82,51 @@ fn main() -> Result<()> {
         }
     }
 
-    let filtered: Vec<&BranchInfo> = branches_to_delete.iter().collect();
+    let mut filtered_branches: Vec<BranchInfo> = Vec::new();
 
-    let filtered = if cli.merged {
-        filter_by_merge_status(&filtered, true)
+    let mut candidates: Vec<&BranchInfo> = branches_to_delete.iter().collect();
+
+    let not_merged: Vec<&BranchInfo> = candidates
+        .iter()
+        .filter(|b| !b.is_merged && cli.merged)
+        .copied()
+        .collect();
+
+    if cli.merged {
+        candidates = candidates.into_iter().filter(|b| b.is_merged).collect();
+    }
+
+    let too_new: Vec<&BranchInfo> = if let Some(older_than) = cli.older_than {
+        candidates
+            .iter()
+            .filter(|b| b.last_commit_date > Utc::now() - older_than)
+            .copied()
+            .collect()
     } else {
-        filtered
+        Vec::new()
     };
 
-    let filtered = if let Some(older_than) = cli.older_than {
-        filter_by_age(&filtered, older_than)
+    let candidates = if let Some(older_than) = cli.older_than {
+        filter_by_age(&candidates, older_than)
     } else {
-        filtered
+        candidates
     };
+
+    filtered_branches.extend(not_merged.into_iter().chain(too_new).map(|b| b.clone()));
 
     let filtered = filter_out_protected(
-        &filtered,
+        &candidates,
         &config.get_protected_branches(),
         current_branch.as_deref(),
     );
 
     let branches_to_delete: Vec<&BranchInfo> = filtered;
 
-    println!("{}:", "Branches to delete".bold(),);
+    println!(
+        "{} ({}):",
+        "Branches to delete".bold(),
+        branches_to_delete.len()
+    );
     for branch in &branches_to_delete {
         println!(
             "   {} {} - {}",
@@ -114,7 +136,39 @@ fn main() -> Result<()> {
         );
     }
 
-    println!("\n{}:", "Protected branches".bold(),);
+    if !filtered_branches.is_empty() {
+        println!(
+            "\n{} ({}):",
+            "Branches kept (filtered out)".yellow().bold(),
+            filtered_branches.len()
+        );
+        for branch in &filtered_branches {
+            let reason = if !branch.is_merged && cli.merged {
+                "not merged"
+            } else if let Some(older_than) = cli.older_than {
+                if branch.last_commit_date > Utc::now() - older_than {
+                    "too new"
+                } else {
+                    "filtered"
+                }
+            } else {
+                "filtered"
+            };
+            println!(
+                "   {} {} - {} ({})",
+                "?".yellow(),
+                branch.name,
+                format_age(branch.last_commit_date),
+                reason.dimmed()
+            );
+        }
+    }
+
+    println!(
+        "\n{} ({}):",
+        "Protected branches".bold(),
+        protected_branches.len()
+    );
     for branch in &protected_branches {
         let reason = if current_branch.as_ref() == Some(&branch.name) {
             "current"
@@ -164,7 +218,13 @@ fn main() -> Result<()> {
 
     for branch in branches_to_delete {
         if cli.clean {
-            match delete_branch(&mut repo, &branch.name) {
+            match safe_delete_branch(
+                &mut repo,
+                &branch.name,
+                &config,
+                current_branch.as_deref(),
+                cli.force,
+            ) {
                 Ok(_) => {
                     println!("{} {}", "Deleted".green(), branch.name);
                     deleted_count += 1;

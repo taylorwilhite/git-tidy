@@ -2,6 +2,9 @@ use anyhow::Result;
 use chrono::{DateTime, TimeZone, Utc};
 use git2::{BranchType, Repository};
 
+use crate::config::Config;
+
+#[derive(Clone)]
 pub struct BranchInfo {
     pub name: String,
     pub is_merged: bool,
@@ -40,7 +43,58 @@ pub fn list_branches(repo: &Repository) -> Result<Vec<BranchInfo>> {
     Ok(branches)
 }
 
-pub fn delete_branch(repo: &mut Repository, branch_name: &str) -> Result<()> {
+pub fn safe_delete_branch(
+    repo: &mut git2::Repository,
+    branch_name: &str,
+    config: &Config,
+    current_branch: Option<&str>,
+    force: bool,
+) -> Result<()> {
+    if current_branch == Some(branch_name) {
+        anyhow::bail!(
+            "Cannot delete current branch '{}'. Switch to another branch first.",
+            branch_name
+        );
+    }
+
+    if config
+        .get_protected_branches()
+        .iter()
+        .any(|b| b == branch_name)
+    {
+        anyhow::bail!(
+            "Branch '{}' is protected and cannot be deleted. Update your config if you want to delete it.",
+            branch_name
+        );
+    }
+
+    if config.is_protected(branch_name) {
+        anyhow::bail!(
+            "Branch '{}' is protected by a glob pattern and cannot be deleted. Update your config if you want to delete it.",
+            branch_name
+        );
+    }
+
+    if !is_branch_merged(repo, branch_name)? {
+        anyhow::bail!(
+            "Branch '{}' is not merged. Refusing to delete unmerged branch. Use 'git branch -D {}' if you really want to delete it.",
+            branch_name,
+            branch_name
+        );
+    }
+
+    if !force {
+        confirm_deletion(branch_name)?;
+    }
+
+    let mut branch = repo.find_branch(branch_name, BranchType::Local)?;
+    branch.delete()?;
+
+    Ok(())
+}
+
+#[allow(dead_code)]
+pub fn delete_branch(repo: &mut git2::Repository, branch_name: &str) -> Result<()> {
     let mut branch = repo.find_branch(branch_name, BranchType::Local)?;
     branch.delete()?;
     Ok(())
@@ -78,4 +132,17 @@ fn is_branch_merged(repo: &Repository, branch_name: &str) -> Result<bool> {
     }
 
     Ok(false)
+}
+
+fn confirm_deletion(branch_name: &str) -> Result<bool> {
+    println!("Delete branch '{}'? [y/N]: ", branch_name);
+
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+
+    if input.trim().to_lowercase() != "y" {
+        anyhow::bail!("Deletion cancelled by user");
+    }
+
+    Ok(true)
 }

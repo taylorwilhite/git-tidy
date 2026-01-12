@@ -3,6 +3,7 @@ use regex::Regex;
 
 use crate::git_operations::BranchInfo;
 
+#[allow(dead_code)]
 pub fn filter_by_merge_status<'a>(
     branches: &'a [&'a BranchInfo],
     merged_only: bool,
