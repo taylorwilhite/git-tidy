@@ -8,7 +8,7 @@ use clap::Parser;
 use colored::Colorize;
 use regex::Regex;
 
-use config::{Config, parse_duration};
+use config::{load_config, parse_duration};
 use filters::{filter_by_age, filter_by_merge_status, filter_out_protected};
 use git_operations::{BranchInfo, delete_branch, get_current_branch, list_branches};
 
@@ -46,7 +46,7 @@ fn parse_regex(pattern: &str) -> Result<Regex, String> {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let config = Config::new();
+    let config = load_config()?;
 
     let repo = git2::Repository::open(".")?;
 
@@ -54,16 +54,26 @@ fn main() -> Result<()> {
 
     let branches = list_branches(&repo)?;
 
+    let protected_patterns = config.get_protected_patterns()?;
+
     let mut branches_to_delete: Vec<BranchInfo> = Vec::new();
     let mut protected_branches: Vec<BranchInfo> = Vec::new();
 
     for branch in branches {
-        let is_protected = config.get_protected_branches().contains(&branch.name)
-            || current_branch.as_ref() == Some(&branch.name)
-            || cli
-                .keep_pattern
-                .as_ref()
-                .is_some_and(|p| p.is_match(&branch.name));
+        let is_protected_exact = config.get_protected_branches().contains(&branch.name);
+        let is_protected_glob = config.is_protected(&branch.name);
+        let is_protected_regex = protected_patterns.iter().any(|p| p.is_match(&branch.name));
+        let is_current_branch = current_branch.as_ref() == Some(&branch.name);
+        let is_protected_cli = cli
+            .keep_pattern
+            .as_ref()
+            .is_some_and(|p| p.is_match(&branch.name));
+
+        let is_protected = is_protected_exact
+            || is_protected_glob
+            || is_protected_regex
+            || is_current_branch
+            || is_protected_cli;
 
         if is_protected {
             protected_branches.push(branch);
@@ -108,6 +118,16 @@ fn main() -> Result<()> {
     for branch in &protected_branches {
         let reason = if current_branch.as_ref() == Some(&branch.name) {
             "current"
+        } else if cli
+            .keep_pattern
+            .as_ref()
+            .is_some_and(|p| p.is_match(&branch.name))
+        {
+            "cli pattern"
+        } else if protected_patterns.iter().any(|p| p.is_match(&branch.name)) {
+            "regex pattern"
+        } else if config.is_protected(&branch.name) {
+            "glob pattern"
         } else if config.get_protected_branches().contains(&branch.name) {
             "protected"
         } else {

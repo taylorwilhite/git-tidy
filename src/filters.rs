@@ -27,6 +27,7 @@ pub fn filter_by_age<'a>(
         .collect()
 }
 
+#[allow(dead_code)]
 pub fn filter_by_pattern<'a>(
     branches: &'a [&'a BranchInfo],
     pattern: &Regex,

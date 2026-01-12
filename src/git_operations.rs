@@ -6,6 +6,7 @@ pub struct BranchInfo {
     pub name: String,
     pub is_merged: bool,
     pub last_commit_date: DateTime<Utc>,
+    #[allow(dead_code)]
     pub is_remote: bool,
 }
 
