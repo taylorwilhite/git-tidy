@@ -146,3 +146,22 @@ fn confirm_deletion(branch_name: &str) -> Result<bool> {
 
     Ok(true)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_branch_info_clone() {
+        let branch = BranchInfo {
+            name: "test-branch".to_string(),
+            is_merged: true,
+            last_commit_date: Utc::now(),
+            is_remote: false,
+        };
+
+        let cloned = branch.clone();
+        assert_eq!(cloned.name, branch.name);
+        assert_eq!(cloned.is_merged, branch.is_merged);
+    }
+}

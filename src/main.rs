@@ -1,4 +1,5 @@
 mod config;
+mod error;
 mod filters;
 mod git_operations;
 
